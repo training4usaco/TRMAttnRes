@@ -3,6 +3,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+def stable_cross_entropy(logits: torch.Tensor, targets: torch.Tensor, ignore_index: int = -1) -> torch.Tensor:
+    logits = logits - logits.amax(dim=-1, keepdim=True)
+    return F.cross_entropy(logits, targets, ignore_index=ignore_index)
+
 class RMSNorm(nn.Module):
     def __init__(self, d_model: int, eps = 1e-8):
         super().__init__()
@@ -112,12 +116,10 @@ class TransformerBlock(nn.Module):
             self.block = MLPMixer(d_model, context_len)
 
     def forward(self, x: torch.Tensor, rotary_cis: torch.Tensor | None = None) -> torch.Tensor:
-        x_norm = self.norm1(x)
-
         if self.use_attention:
-            x = x + self.block(x_norm, rotary_cis)
+            x = self.norm1(x + self.block(x, rotary_cis))
         else:
-            x = x + self.block(x_norm)
+            x = self.norm1(x + self.block(x))
 
-        x = x + self.ffn(self.norm2(x))
+        x = self.norm2(x + self.ffn(x))
         return x

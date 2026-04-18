@@ -1,8 +1,10 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .layers import RMSNorm, TransformerBlock, calculate_rotary_cis
+from .layers import RMSNorm, TransformerBlock, calculate_rotary_cis, stable_cross_entropy
 
 class TRMNet(nn.Module):
     def __init__(self, d_model: int, n_heads: int, d_ff: int, context_len: int, use_attention: bool = True):
@@ -49,19 +51,27 @@ class TRM(nn.Module):
         self.n_sup = n_sup
         self.use_attention = use_attention
 
+        self.embed_scale = math.sqrt(d_model)
+        embed_init_std = 1.0 / self.embed_scale
+
         self.input_embeddings = nn.Embedding(vocab_size, d_model)
-        self.y_init = nn.Parameter(torch.zeros(1, 1, d_model))
-        self.z_init = nn.Parameter(torch.zeros(1, 1, d_model))
+
+        self.y_init = nn.Parameter(torch.empty(1, 1, d_model))
+        self.z_init = nn.Parameter(torch.empty(1, 1, d_model))
 
         self.net = TRMNet(d_model, n_heads, d_ff, context_len, use_attention)
 
-        self.output_norm = RMSNorm(d_model)
         self.output_head = nn.Linear(d_model, vocab_size, bias=False)
         self.q_head = nn.Linear(d_model, 1, bias=False)
 
-        nn.init.normal_(self.input_embeddings.weight, std = 0.02)
-        nn.init.normal_(self.output_head.weight, std = 0.02)
+        nn.init.trunc_normal_(self.y_init, std = 1.0)
+        nn.init.trunc_normal_(self.z_init, std = 1.0)
+        nn.init.normal_(self.input_embeddings.weight, std=embed_init_std)
+        nn.init.normal_(self.output_head.weight, std=0.02)
         nn.init.zeros_(self.q_head.weight)
+
+    def embed_input(self, x_tokens: torch.Tensor) -> torch.Tensor:
+        return self.embed_scale * self.input_embeddings(x_tokens)
 
     def latent_recursion(self, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         for _ in range(self.n):
@@ -69,7 +79,7 @@ class TRM(nn.Module):
         y = self.net(y + z)
         return y, z
 
-    def deep_recursion(self, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+    def deep_recursion(self, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor):
         with torch.no_grad():
             for j in range(self.T - 1):
                 y, z = self.latent_recursion(x, y, z)
@@ -78,9 +88,8 @@ class TRM(nn.Module):
         return y, z
 
     def get_output(self, y: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        y_norm = self.output_norm(y)
-        logits = self.output_head(y_norm)   # (B, L, vocab_size)
-        q = self.q_head(y_norm.mean(dim=1)) # (B, 1)
+        logits = self.output_head(y)   # (B, L, vocab_size)
+        q = self.q_head(y.mean(dim=1)) # (B, 1)
 
         return logits, q
 
@@ -91,7 +100,7 @@ class TRM(nn.Module):
         """
         B, L = x_tokens.shape
 
-        x = self.input_embeddings(x_tokens)
+        x = self.embed_input(x_tokens)
         y = self.y_init.expand(B, L, self.d_model)
         z = self.z_init.expand(B, L, self.d_model)
 
@@ -100,14 +109,14 @@ class TRM(nn.Module):
         return self._infer_forward(x, y, z)
 
     def _train_forward(self, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor, y_tokens: torch.Tensor):
-        total_loss = torch.tensor(0.0, device=x.device, requires_grad=True)
+        losses = []
         final_logits = None
 
         for step in range(self.n_sup):
             y, z = self.deep_recursion(x, y, z)
             logits, q = self.get_output(y)
 
-            pred_loss = F.cross_entropy(
+            pred_loss = stable_cross_entropy(
                 logits.reshape(-1, self.vocab_size),    # 3D -> 2D
                 y_tokens.reshape(-1),                   # 2D -> 1D
                 ignore_index=-1
@@ -118,7 +127,7 @@ class TRM(nn.Module):
                 is_correct = (preds == y_tokens).all(dim=1).float().unsqueeze(1)    # (B, 1)
             halt_loss = F.binary_cross_entropy_with_logits(q, is_correct)
 
-            total_loss = total_loss + pred_loss + 0.1 * halt_loss
+            losses.append(pred_loss + 0.1 * halt_loss)
             final_logits = logits.detach()
 
             # Detach computational graph but pass refined state to next supervision step
@@ -128,7 +137,7 @@ class TRM(nn.Module):
             if q.detach().mean().item() > 0:
                 break
 
-        return total_loss, final_logits
+        return torch.stack(losses).sum(), final_logits
 
     def _infer_forward(self, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor):
         logits_list = []
