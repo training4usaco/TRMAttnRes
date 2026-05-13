@@ -34,6 +34,7 @@ class TrainConfig:
     checkpoint_dir: str = "checkpoints"
     log_every: int = 10
     device: str = "cuda"
+    compile: bool = True
 
 
 @dataclass
@@ -48,7 +49,7 @@ class SudokuConfig:
     train: TrainConfig = field(default_factory=lambda: TrainConfig(
         weight_decay=1.0,
         total_steps=50_000,         # was 60k, official uses 50k
-        batch_size=256,
+        batch_size=768,
     ))
     n_augmentations: int = 1000
     data_dir: str = "data/sudoku"

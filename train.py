@@ -234,6 +234,9 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
     device = get_device(train_cfg.device)
 
     model = build_model(model_cfg).to(device)
+    if train_cfg.compile and device.type == "cuda":
+        model = torch.compile(model)
+        print("torch.compile enabled")
     ema = EMA(model, decay=train_cfg.ema_decay)
     optimizer = build_optimizer(model, train_cfg)
 
@@ -357,6 +360,7 @@ def main():
     parser.add_argument("--use_attn_res", action="store_true")
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--device", type=str, default=None, help="Override device (cuda, mps, cpu)")
+    parser.add_argument("--no_compile", action="store_true", help="Disable torch.compile")
     args = parser.parse_args()
 
     if args.benchmark == "sudoku":
@@ -373,6 +377,8 @@ def main():
     cfg.model.use_attn_res = args.use_attn_res
     if args.device is not None:
         cfg.train.device = args.device
+    if args.no_compile:
+        cfg.train.compile = False
     run_name = args.run_name or f"{args.benchmark}_{'attnres' if args.use_attn_res else 'base'}"
     train(benchmark, cfg.model, cfg.train, run_name)
 
