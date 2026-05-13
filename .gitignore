@@ -50,6 +50,9 @@ htmlcov/
 
 # Data files
 *.csv
+*.npz
+*.npy
+data/
 
 # Checkpoints
 checkpoints/

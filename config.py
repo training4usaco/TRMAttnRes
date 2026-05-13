@@ -30,7 +30,7 @@ class TrainConfig:
     total_steps: int = 50_000
     ema_decay: float = 0.999
     grad_clip: float = 1.0
-    checkpoint_every: int = 5000
+    checkpoint_every: int = 1000
     checkpoint_dir: str = "checkpoints"
     log_every: int = 100
     device: str = "cuda"
