@@ -1,3 +1,4 @@
+import time
 import os
 import argparse
 import torch
@@ -247,6 +248,7 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
     optimizer = build_optimizer(model, train_cfg)
 
     train_loader = benchmark.get_train_loader(train_cfg.batch_size)
+    train_loader.pin_memory = True
 
     print(f"Parameters: {model.num_parameters():,}")
     print(f"Training on {device} for {train_cfg.total_steps} steps")
@@ -255,16 +257,15 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
         while True:
             yield from loader
 
-    import time
     data_iter = infinite_loader(train_loader)
     running_loss = 0.0
     t0 = time.time()
 
+    model.train()
     for step in range(train_cfg.total_steps):
-        model.train()
         x_tokens, y_tokens = next(data_iter)
-        x_tokens = x_tokens.to(device)
-        y_tokens = y_tokens.to(device)
+        x_tokens = x_tokens.to(device, non_blocking=True)
+        y_tokens = y_tokens.to(device, non_blocking=True)
 
         lr = get_lr(step, train_cfg.lr, train_cfg.warmup_steps)
         for pg in optimizer.param_groups:
@@ -337,7 +338,7 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
             halt_loss = F.binary_cross_entropy_with_logits(q, is_correct)
             loss = pred_loss + 0.1 * halt_loss
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none = True)
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
         optimizer.step()
