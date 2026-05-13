@@ -9,11 +9,18 @@ def main():
     parser.add_argument("--input", type=str, required=True, help="Path to sudoku.csv")
     parser.add_argument("--output_dir", type=str, default="data/sudoku")
     parser.add_argument("--n_train", type=int, default=1000)
+    parser.add_argument("--max_clues", type=int, default=23, help="Max given clues to keep (<=23 = extreme difficulty)")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
 
     df = pd.read_csv(args.input, dtype=str)
+
+    # Filter for extreme difficulty: puzzles with <= args.max_clues given digits
+    clue_counts = df["quizzes"].apply(lambda s: sum(c != '0' for c in s))
+    df = df[clue_counts <= args.max_clues].reset_index(drop=True)
+    print(f"Kept {len(df)} extreme-difficulty puzzles (≤{args.max_clues} clues)")
+
     clues = np.array([[int(c) for c in row] for row in df["quizzes"]], dtype=np.int64)
     solutions = np.array([[int(c) for c in row] for row in df["solutions"]], dtype=np.int64)
 
