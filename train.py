@@ -290,6 +290,7 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
 
 def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
     B, L = x_tokens.shape
+    device_type = x_tokens.device.type
 
     if hasattr(model, 'trm'):
         trm = model.trm
@@ -301,28 +302,29 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
     history_y, history_z = [], []
 
     total_loss_value = 0.0
+    use_amp = device_type == "cuda"
 
     for sup_step in range(trm.n_sup):
-        x = trm.embed_input(x_tokens)
-
         if hasattr(model, 'attn_res'):
             y_init = trm.y_init.expand(B, L, trm.d_model)
             z_init = trm.z_init.expand(B, L, trm.d_model)
             y, z = model.attn_res(sup_step, y_init, z_init, history_y, history_z)
 
-        y, z = trm.deep_recursion(x, y, z)
-        logits, q = trm.get_output(y)
+        with torch.autocast(device_type, dtype=torch.bfloat16, enabled=use_amp):
+            x = trm.embed_input(x_tokens)
+            y, z = trm.deep_recursion(x, y, z)
+            logits, q = trm.get_output(y)
 
-        pred_loss = stable_cross_entropy(
-            logits.reshape(-1, trm.vocab_size),
-            y_tokens.reshape(-1),
-            ignore_index=-1,
-        )
-        with torch.no_grad():
-            preds = logits.argmax(-1)
-            is_correct = (preds == y_tokens).all(dim = 1).float().unsqueeze(1)
-        halt_loss = F.binary_cross_entropy_with_logits(q, is_correct)
-        loss = pred_loss + 0.1 * halt_loss
+            pred_loss = stable_cross_entropy(
+                logits.reshape(-1, trm.vocab_size),
+                y_tokens.reshape(-1),
+                ignore_index=-1,
+            )
+            with torch.no_grad():
+                preds = logits.argmax(-1)
+                is_correct = (preds == y_tokens).all(dim=1).float().unsqueeze(1)
+            halt_loss = F.binary_cross_entropy_with_logits(q.float(), is_correct)
+            loss = pred_loss + 0.1 * halt_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -351,6 +353,7 @@ def main():
     parser.add_argument("--benchmark", choices=["sudoku", "maze", "arc1", "arc2", "arc3"], required=True)
     parser.add_argument("--use_attn_res", action="store_true")
     parser.add_argument("--run_name", type=str, default=None)
+    parser.add_argument("--device", type=str, default=None, help="Override device (cuda, mps, cpu)")
     args = parser.parse_args()
 
     if args.benchmark == "sudoku":
@@ -365,6 +368,8 @@ def main():
         benchmark = ARCBenchmark(cfg)
 
     cfg.model.use_attn_res = args.use_attn_res
+    if args.device is not None:
+        cfg.train.device = args.device
     run_name = args.run_name or f"{args.benchmark}_{'attnres' if args.use_attn_res else 'base'}"
     train(benchmark, cfg.model, cfg.train, run_name)
 

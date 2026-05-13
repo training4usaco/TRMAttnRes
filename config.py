@@ -33,7 +33,7 @@ class TrainConfig:
     checkpoint_every: int = 1000
     checkpoint_dir: str = "checkpoints"
     log_every: int = 10
-    device: str = "mps"
+    device: str = "cuda"
 
 
 @dataclass
@@ -48,11 +48,11 @@ class SudokuConfig:
     train: TrainConfig = field(default_factory=lambda: TrainConfig(
         weight_decay=1.0,
         total_steps=50_000,         # was 60k, official uses 50k
-        batch_size=32,              # official uses 768, reduced for MPS
+        batch_size=512,
     ))
     n_augmentations: int = 1000
     data_dir: str = "data/sudoku"
-    num_workers: int = 0            # safest on macOS
+    num_workers: int = 4
 
 
 @dataclass
@@ -67,11 +67,11 @@ class MazeConfig:
     train: TrainConfig = field(default_factory=lambda: TrainConfig(
         weight_decay=1.0,
         total_steps=50_000,
-        batch_size=16,              # official uses 128 on 4 GPUs, reduced for MPS
+        batch_size=128,
     ))
     n_augmentations: int = 8
     data_dir: str = "data/maze"
-    num_workers: int = 0
+    num_workers: int = 4
 
 
 @dataclass
@@ -88,10 +88,10 @@ class ARCConfig:
         embed_lr=1e-2,
         weight_decay=0.1,
         total_steps=100_000,
-        batch_size=4,               # very long sequences, keep tiny for MPS
+        batch_size=4,
     ))
     n_augmentations: int = 1000
     n_test_votes: int = 1000
     version: int = 1
     data_dir: str = "data/arc"
-    num_workers: int = 0
+    num_workers: int = 4
