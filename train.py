@@ -12,11 +12,8 @@ from benchmarks.sudoku import SudokuBenchmark
 from benchmarks.maze import MazeBenchmark
 from benchmarks.arc_agi import ARCBenchmark
 
-try:
-    _n_cpus = len(os.sched_getaffinity(0))  # actual CPUs allocated to this process
-except AttributeError:
-    _n_cpus = os.cpu_count()
-torch.set_num_threads(_n_cpus)
+torch.backends.cudnn.benchmark = True
+torch.set_float32_matmul_precision('high')
 
 # --- Device ---------------------------------------------------------------
 
@@ -88,8 +85,20 @@ def build_model(model_cfg: ModelConfig) -> nn.Module:
         use_attention=model_cfg.use_attention,
     )
     if model_cfg.use_attn_res:
-        return TRMAttnRes(trm)
-    return trm
+        model = TRMAttnRes(trm)
+    else:
+        model = trm
+
+    # Compile the inner network — this is called hundreds of times per step
+    model.trm.net if hasattr(model, 'trm') else model.net
+    inner = model.trm.net if hasattr(model, 'trm') else model.net
+    inner = torch.compile(inner)
+    if hasattr(model, 'trm'):
+        model.trm.net = inner
+    else:
+        model.net = inner
+
+    return model
 
 
 # --- Optimizer factory ----------------------------------------------------
@@ -234,9 +243,6 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
     device = get_device(train_cfg.device)
 
     model = build_model(model_cfg).to(device)
-    if train_cfg.compile and device.type == "cuda":
-        model = torch.compile(model)
-        print("torch.compile enabled")
     ema = EMA(model, decay=train_cfg.ema_decay)
     optimizer = build_optimizer(model, train_cfg)
 
@@ -296,7 +302,6 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
 
 def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
     B, L = x_tokens.shape
-    device_type = x_tokens.device.type
 
     if hasattr(model, 'trm'):
         trm = model.trm
@@ -307,19 +312,18 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
     z = trm.z_init.expand(B, L, trm.d_model)
     history_y, history_z = [], []
 
-    use_amp = device_type == "cuda"
     total_loss_value = 0.0
-
-    optimizer.zero_grad()
+    n_sup_steps = 0
 
     for sup_step in range(trm.n_sup):
+        x = trm.embed_input(x_tokens)
+
         if hasattr(model, 'attn_res'):
             y_init = trm.y_init.expand(B, L, trm.d_model)
             z_init = trm.z_init.expand(B, L, trm.d_model)
             y, z = model.attn_res(sup_step, y_init, z_init, history_y, history_z)
 
-        with torch.autocast(device_type, dtype=torch.bfloat16, enabled=use_amp):
-            x = trm.embed_input(x_tokens)
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             y, z = trm.deep_recursion(x, y, z)
             logits, q = trm.get_output(y)
 
@@ -329,13 +333,17 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
                 ignore_index=-1,
             )
             with torch.no_grad():
-                preds = logits.argmax(-1)
-                is_correct = (preds == y_tokens).all(dim=1).float().unsqueeze(1)
-            halt_loss = F.binary_cross_entropy_with_logits(q.float(), is_correct)
+                is_correct = (logits.argmax(-1) == y_tokens).all(dim=1).float().unsqueeze(1)
+            halt_loss = F.binary_cross_entropy_with_logits(q, is_correct)
             loss = pred_loss + 0.1 * halt_loss
 
+        optimizer.zero_grad()
         loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
+        optimizer.step()
+
         total_loss_value += loss.item()
+        n_sup_steps += 1
 
         y = y.detach()
         z = z.detach()
@@ -347,10 +355,7 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
         if q.detach().mean().item() > 0:
             break
 
-    nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
-    optimizer.step()
-
-    return total_loss_value
+    return total_loss_value / n_sup_steps
 
 
 # --- Entry point ----------------------------------------------------------
@@ -360,8 +365,6 @@ def main():
     parser.add_argument("--benchmark", choices=["sudoku", "maze", "arc1", "arc2", "arc3"], required=True)
     parser.add_argument("--use_attn_res", action="store_true")
     parser.add_argument("--run_name", type=str, default=None)
-    parser.add_argument("--device", type=str, default=None, help="Override device (cuda, mps, cpu)")
-    parser.add_argument("--no_compile", action="store_true", help="Disable torch.compile")
     args = parser.parse_args()
 
     if args.benchmark == "sudoku":
@@ -376,10 +379,6 @@ def main():
         benchmark = ARCBenchmark(cfg)
 
     cfg.model.use_attn_res = args.use_attn_res
-    if args.device is not None:
-        cfg.train.device = args.device
-    if args.no_compile:
-        cfg.train.compile = False
     run_name = args.run_name or f"{args.benchmark}_{'attnres' if args.use_attn_res else 'base'}"
     train(benchmark, cfg.model, cfg.train, run_name)
 

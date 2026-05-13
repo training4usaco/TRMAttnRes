@@ -20,7 +20,7 @@ class ModelConfig:
 
 @dataclass
 class TrainConfig:
-    batch_size: int = 32
+    batch_size: int = 768
     lr: float = 1e-4
     embed_lr: Optional[float] = None
     weight_decay: float = 1.0
@@ -30,11 +30,10 @@ class TrainConfig:
     total_steps: int = 50_000
     ema_decay: float = 0.999
     grad_clip: float = 1.0
-    checkpoint_every: int = 1000
+    checkpoint_every: int = 5000
     checkpoint_dir: str = "checkpoints"
-    log_every: int = 10
+    log_every: int = 100
     device: str = "cuda"
-    compile: bool = True
 
 
 @dataclass
@@ -42,18 +41,19 @@ class SudokuConfig:
     model: ModelConfig = field(default_factory=lambda: ModelConfig(
         vocab_size=10,
         context_len=81,
-        n=6,                        # L_cycles=6 for sudoku
-        T=3,                        # H_cycles=3
-        use_attention=False,        # mlp_t=True in official
+        n=6,
+        T=3,
+        use_attention=False,
     ))
     train: TrainConfig = field(default_factory=lambda: TrainConfig(
         weight_decay=1.0,
-        total_steps=50_000,         # was 60k, official uses 50k
-        batch_size=768,
+        total_steps=10_000,         # scaled for batch_size=4096
+        warmup_steps=400,
+        batch_size=4096,            # 98GB VRAM, tiny model — go big
     ))
     n_augmentations: int = 1000
     data_dir: str = "data/sudoku"
-    num_workers: int = 4
+    num_workers: int = 8            # matches nproc
 
 
 @dataclass
@@ -61,18 +61,18 @@ class MazeConfig:
     model: ModelConfig = field(default_factory=lambda: ModelConfig(
         vocab_size=5,
         context_len=900,
-        n=4,                        # L_cycles=4 for maze (NOT 6)
+        n=4,
         T=3,
         use_attention=True,
     ))
     train: TrainConfig = field(default_factory=lambda: TrainConfig(
         weight_decay=1.0,
         total_steps=50_000,
-        batch_size=128,
+        batch_size=256,             # longer sequences, still plenty of VRAM
     ))
     n_augmentations: int = 8
     data_dir: str = "data/maze"
-    num_workers: int = 4
+    num_workers: int = 8
 
 
 @dataclass
@@ -80,7 +80,7 @@ class ARCConfig:
     model: ModelConfig = field(default_factory=lambda: ModelConfig(
         vocab_size=11,
         context_len=ARC_CONTEXT_LEN,
-        n=4,                        # L_cycles=4 for ARC (NOT 6)
+        n=4,
         T=3,
         use_attention=True,
     ))
@@ -89,10 +89,10 @@ class ARCConfig:
         embed_lr=1e-2,
         weight_decay=0.1,
         total_steps=100_000,
-        batch_size=4,
+        batch_size=64,
     ))
     n_augmentations: int = 1000
     n_test_votes: int = 1000
     version: int = 1
     data_dir: str = "data/arc"
-    num_workers: int = 4
+    num_workers: int = 8
