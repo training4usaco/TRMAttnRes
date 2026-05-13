@@ -12,8 +12,11 @@ from benchmarks.sudoku import SudokuBenchmark
 from benchmarks.maze import MazeBenchmark
 from benchmarks.arc_agi import ARCBenchmark
 
-torch.set_num_threads(os.cpu_count())
-torch.set_num_interop_threads(os.cpu_count())
+try:
+    _n_cpus = len(os.sched_getaffinity(0))  # actual CPUs allocated to this process
+except AttributeError:
+    _n_cpus = os.cpu_count()
+torch.set_num_threads(_n_cpus)
 
 # --- Device ---------------------------------------------------------------
 

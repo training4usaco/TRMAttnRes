@@ -48,7 +48,7 @@ class SudokuConfig:
     train: TrainConfig = field(default_factory=lambda: TrainConfig(
         weight_decay=1.0,
         total_steps=50_000,         # was 60k, official uses 50k
-        batch_size=512,
+        batch_size=256,
     ))
     n_augmentations: int = 1000
     data_dir: str = "data/sudoku"
