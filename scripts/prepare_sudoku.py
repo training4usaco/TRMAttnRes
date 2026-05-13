@@ -24,14 +24,16 @@ def main():
     clues = np.array([[int(c) for c in row] for row in df["quizzes"]], dtype=np.int64)
     solutions = np.array([[int(c) for c in row] for row in df["solutions"]], dtype=np.int64)
 
+    n_test = min(len(clues) - args.n_train, args.n_train // 10)
+
     np.savez(os.path.join(args.output_dir, "train.npz"),
              clues=clues[:args.n_train],
              solutions=solutions[:args.n_train])
     np.savez(os.path.join(args.output_dir, "test.npz"),
-             clues=clues[args.n_train:],
-             solutions=solutions[args.n_train:])
+             clues=clues[args.n_train:args.n_train + n_test],
+             solutions=solutions[args.n_train:args.n_train + n_test])
 
-    print(f"Saved {args.n_train} train and {len(clues) - args.n_train} test examples to {args.output_dir}")
+    print(f"Saved {args.n_train} train and {n_test} test examples to {args.output_dir}")
 
 
 if __name__ == "__main__":
