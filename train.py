@@ -307,8 +307,10 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
     z = trm.z_init.expand(B, L, trm.d_model)
     history_y, history_z = [], []
 
-    total_loss_value = 0.0
     use_amp = device_type == "cuda"
+    total_loss_value = 0.0
+
+    optimizer.zero_grad()
 
     for sup_step in range(trm.n_sup):
         if hasattr(model, 'attn_res'):
@@ -332,11 +334,7 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
             halt_loss = F.binary_cross_entropy_with_logits(q.float(), is_correct)
             loss = pred_loss + 0.1 * halt_loss
 
-        optimizer.zero_grad()
         loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
-        optimizer.step()
-
         total_loss_value += loss.item()
 
         y = y.detach()
@@ -348,6 +346,9 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
 
         if q.detach().mean().item() > 0:
             break
+
+    nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
+    optimizer.step()
 
     return total_loss_value
 
