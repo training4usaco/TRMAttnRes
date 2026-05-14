@@ -1,0 +1,6 @@
+
+CondaError: Run 'conda init' before 'conda activate'
+
+usage: train.py [-h] --benchmark {sudoku,maze,arc1,arc2,arc3} [--use_attn_res]
+                [--run_name RUN_NAME]
+train.py: error: the following arguments are required: --benchmark
