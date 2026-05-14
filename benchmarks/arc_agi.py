@@ -184,6 +184,7 @@ class ARCBenchmark(Benchmark):
         # Ground truth in original (un-augmented) color space
         gt_encoded = [_encode_task(task) for task in self.test_tasks]
 
+        n_tasks = len(self.test_tasks)
         with torch.no_grad():
             for task_idx, task in enumerate(self.test_tasks):
                 votes = []
@@ -210,5 +211,7 @@ class ARCBenchmark(Benchmark):
                 _, gt_y = gt_encoded[task_idx]
                 supervised_mask = gt_y != -1
                 n_correct += int(np.array_equal(best_pred[supervised_mask], gt_y[supervised_mask]))
+
+                print(f"  [{task_idx+1}/{n_tasks}] correct so far: {n_correct}/{task_idx+1} ({n_correct/(task_idx+1):.4f})")
 
         return {"accuracy": n_correct / len(self.test_tasks)}

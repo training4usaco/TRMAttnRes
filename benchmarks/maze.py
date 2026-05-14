@@ -76,9 +76,10 @@ class MazeBenchmark(Benchmark):
         loader = self.get_test_loader(batch_size=128)
         n_correct = 0
         n_total = 0
+        n_batches = len(loader)
 
         with torch.no_grad():
-            for x_tokens, y_tokens in loader:
+            for i, (x_tokens, y_tokens) in enumerate(loader):
                 x_tokens = x_tokens.to(device)
                 y_tokens = y_tokens.to(device)
 
@@ -86,5 +87,8 @@ class MazeBenchmark(Benchmark):
                 preds = logits_list[-1].argmax(-1)
                 n_correct += (preds == y_tokens).all(dim=1).sum().item()
                 n_total += x_tokens.shape[0]
+
+                if (i + 1) % 10 == 0 or (i + 1) == n_batches:
+                    print(f"  [{i+1}/{n_batches}] {n_total} samples, running acc {n_correct/n_total:.4f}")
 
         return {"accuracy": n_correct / n_total}

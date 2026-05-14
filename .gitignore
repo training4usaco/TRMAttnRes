@@ -62,5 +62,6 @@ checkpoints/
 
 # Logs
 *.log
+*.out
 runs/
 wandb/
