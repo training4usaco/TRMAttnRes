@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .trm import TRM
-from .layers import RMSNorm, stable_cross_entropy
+from .layers import stable_cross_entropy, rms_norm
 
 
 class SupervisionStepAttnRes(nn.Module):
@@ -16,16 +16,13 @@ class SupervisionStepAttnRes(nn.Module):
         self.wqy = nn.Parameter(torch.zeros(self.n_sup, self.d_model))
         self.wqz = nn.Parameter(torch.zeros(self.n_sup, self.d_model))
 
-        self.key_norm_y = RMSNorm(self.d_model)
-        self.key_norm_z = RMSNorm(self.d_model)
-
     @staticmethod
     def _softmax_attend(query: torch.Tensor,    # (D)
-                        sources: list,          # N x (B, L, D)
-                        key_norm: RMSNorm) -> torch.Tensor:
+                        sources: list          # N x (B, L, D)
+                        ) -> torch.Tensor:
         N = len(sources)
         value = torch.stack(sources, dim=0)
-        key = key_norm(value)
+        key = rms_norm(value)
 
         logits = torch.einsum('d, nbld -> nbl', query, key)  # (N, B, L)
         weights = F.softmax(logits, dim=0)
@@ -42,8 +39,8 @@ class SupervisionStepAttnRes(nn.Module):
         sources_y = [y_init] + y_history
         sources_z = [z_init] + z_history
 
-        y_new = self._softmax_attend(self.wqy[step], sources_y, self.key_norm_y)
-        z_new = self._softmax_attend(self.wqz[step], sources_z, self.key_norm_z)
+        y_new = self._softmax_attend(self.wqy[step], sources_y)
+        z_new = self._softmax_attend(self.wqz[step], sources_z)
 
         return y_new, z_new
 
