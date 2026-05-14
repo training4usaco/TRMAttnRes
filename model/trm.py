@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .layers import RMSNorm, TransformerBlock, calculate_rotary_cis, stable_cross_entropy
+from .layers import TransformerBlock, calculate_rotary_cis, stable_cross_entropy
 
 class TRMNet(nn.Module):
     def __init__(self, d_model: int, n_heads: int, d_ff: int, context_len: int, use_attention: bool = True):
