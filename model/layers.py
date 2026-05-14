@@ -117,9 +117,9 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, rotary_cis: torch.Tensor | None = None) -> torch.Tensor:
         if self.use_attention:
-            x = self.norm1(x + self.block(x, rotary_cis))
+            x = x + self.block(self.norm1(x), rotary_cis)
         else:
-            x = self.norm1(x + self.block(x))
+            x = x + self.block(self.norm1(x))
 
-        x = self.norm2(x + self.ffn(x))
+        x = x + self.ffn(self.norm2(x))
         return x

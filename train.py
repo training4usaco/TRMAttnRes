@@ -13,6 +13,8 @@ from benchmarks.sudoku import SudokuBenchmark
 from benchmarks.maze import MazeBenchmark
 from benchmarks.arc_agi import ARCBenchmark
 
+import math
+
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
 
