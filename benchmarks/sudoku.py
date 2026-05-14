@@ -54,22 +54,24 @@ class SudokuDataset(BenchmarkDataset):
     augmented set that would consume excessive memory.
     """
 
-    def __init__(self, clues: np.ndarray, solutions: np.ndarray, do_augment: bool = True):
+    def __init__(self, clues, solutions, do_augment = True, n_augmentations = 1000):
         self.clues = clues
         self.solutions = solutions
         self.do_augment = do_augment
+        self.n_augmentations = n_augmentations if do_augment else 1
 
     def __len__(self):
-        return len(self.clues)
+        return len(self.clues) * self.n_augmentations
 
     def __getitem__(self, idx):
-        clue = self.clues[idx]
-        sol = self.solutions[idx]
+        real_idx = idx % len(self.clues)
+        clue = self.clues[real_idx]
+        sol = self.solutions[real_idx]
 
         if self.do_augment:
             params = _generate_sudoku_transform()
             clue = _apply_sudoku_transform(clue, *params)
-            sol = _apply_sudoku_transform(sol, *params)  # same params — critical
+            sol = _apply_sudoku_transform(sol, *params)
 
         return torch.tensor(clue, dtype=torch.long), torch.tensor(sol, dtype=torch.long)
 
