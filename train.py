@@ -65,9 +65,12 @@ class EMA:
 
 # --- LR schedule ----------------------------------------------------------
 
-def get_lr(step: int, base_lr: float, warmup_steps: int) -> float:
+def get_lr(step: int, base_lr: float, warmup_steps: int, total_steps: int = 0) -> float:
     if step < warmup_steps:
         return base_lr * step / max(warmup_steps, 1)
+    if total_steps > 0:
+        progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
+        return base_lr * 0.5 * (1.0 + math.cos(math.pi * progress))
     return base_lr
 
 
@@ -267,7 +270,7 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
         x_tokens = x_tokens.to(device, non_blocking=True)
         y_tokens = y_tokens.to(device, non_blocking=True)
 
-        lr = get_lr(step, train_cfg.lr, train_cfg.warmup_steps)
+        lr = get_lr(step, train_cfg.lr, train_cfg.warmup_steps, train_cfg.total_steps)
         for pg in optimizer.param_groups:
             if not pg.get("is_embed", False):
                 pg["lr"] = lr
@@ -353,7 +356,7 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
             history_y.append(y)
             history_z.append(z)
 
-        if q.detach().mean().item() > 0:
+        if sup_step >= 3 and q.detach().mean().item() > 0:
             break
 
     return total_loss_value / n_sup_steps
