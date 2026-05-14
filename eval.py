@@ -13,7 +13,7 @@ def main():
     parser.add_argument("--benchmark", choices=["sudoku", "maze", "arc1", "arc2", "arc3"], required=True)
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--use_attn_res", action="store_true")
-    parser.add_argument("--device", type=str, default="mps")
+    parser.add_argument("--device", type=str, default="cuda")
     args = parser.parse_args()
 
     device = get_device(args.device)            # was: torch.device(... cuda check ...)
