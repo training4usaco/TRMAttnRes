@@ -47,13 +47,13 @@ class SudokuConfig:
     ))
     train: TrainConfig = field(default_factory=lambda: TrainConfig(
         weight_decay=1.0,
-        total_steps=10_000,         # scaled for batch_size=4096
-        warmup_steps=400,
-        batch_size=4096,            # 98GB VRAM, tiny model — go big
+        total_steps=50_000,
+        warmup_steps=4000,
+        batch_size=4096,
     ))
     n_augmentations: int = 1000
     data_dir: str = "data/sudoku"
-    num_workers: int = 8            # matches nproc
+    num_workers: int = 8
 
 
 @dataclass
