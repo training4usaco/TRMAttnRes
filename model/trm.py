@@ -71,7 +71,7 @@ class TRM(nn.Module):
         nn.init.zeros_(self.q_head.weight)
 
     def embed_input(self, x_tokens: torch.Tensor) -> torch.Tensor:
-        return self.input_embeddings(x_tokens)
+        return self.embed_scale * self.input_embeddings(x_tokens)
 
     def latent_recursion(self, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         for _ in range(self.n):
