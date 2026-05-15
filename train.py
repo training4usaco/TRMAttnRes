@@ -346,7 +346,7 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg, halt
             )
             with torch.no_grad():
                 is_correct = (logits.argmax(-1) == y_tokens).all(dim=1).float().unsqueeze(1)
-            halt_loss = F.binary_cross_entropy_with_logits(q, is_correct)
+            halt_loss = F.binary_cross_entropy_with_logits(q, is_correct.squeeze(1).long())
             loss = pred_loss + 0.1 * halt_loss
 
         optimizer.zero_grad(set_to_none=True)
@@ -364,7 +364,7 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg, halt
             history_y.append(y)
             history_z.append(z)
 
-        if sup_step >= min_sup_steps and q.detach().mean().item() > 0:
+        if sup_step >= min_sup_steps and q.detach().argmax(-1).float().mean().item() > 0.5:
             break
 
     return total_loss_value / n_sup_steps

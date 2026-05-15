@@ -62,7 +62,9 @@ class TRM(nn.Module):
         self.net = TRMNet(d_model, n_heads, d_ff, context_len, use_attention)
 
         self.output_head = nn.Linear(d_model, vocab_size, bias=False)
-        self.q_head = nn.Linear(d_model, 1, bias=False)
+        self.q_head = nn.Linear(d_model, 2, bias=False)
+        nn.init.zeros_(self.q_head.weight)
+        nn.init.zeros_(self.q_head.bias)
 
         nn.init.trunc_normal_(self.y_init, std = 1.0)
         nn.init.trunc_normal_(self.z_init, std = 1.0)
@@ -89,7 +91,7 @@ class TRM(nn.Module):
 
     def get_output(self, y: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         logits = self.output_head(y)   # (B, L, vocab_size)
-        q = self.q_head(y.mean(dim=1)) # (B, 1)
+        q = self.q_head(y.mean(dim=1)) # (B, 2)
 
         return logits, q
 
@@ -125,7 +127,7 @@ class TRM(nn.Module):
             with torch.no_grad():
                 preds = logits.argmax(-1)   # (B, L)
                 is_correct = (preds == y_tokens).all(dim=1).float().unsqueeze(1)    # (B, 1)
-            halt_loss = F.binary_cross_entropy_with_logits(q, is_correct)
+            halt_loss = F.binary_cross_entropy_with_logits(q, is_correct.squeeze(1).long())
 
             losses.append(pred_loss + 0.1 * halt_loss)
             final_logits = logits.detach()

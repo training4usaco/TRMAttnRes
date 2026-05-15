@@ -47,7 +47,7 @@ class SudokuConfig:
     ))
     train: TrainConfig = field(default_factory=lambda: TrainConfig(
         weight_decay=1.0,
-        total_steps=50_000,
+        total_steps=100_000,
         warmup_steps=4000,
         batch_size=768,
     ))
