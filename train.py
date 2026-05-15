@@ -1,4 +1,5 @@
 import time
+import random
 import os
 import argparse
 import torch
@@ -306,7 +307,7 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
     return model, ema
 
 
-def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
+def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg, halt_exploration_prob=0.1):
     B, L = x_tokens.shape
 
     if hasattr(model, 'trm'):
@@ -320,6 +321,11 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
 
     total_loss_value = 0.0
     n_sup_steps = 0
+
+    if random.random() < halt_exploration_prob:
+        min_sup_steps = random.randint(2, trm.n_sup)
+    else:
+        min_sup_steps = 0
 
     for sup_step in range(trm.n_sup):
         x = trm.embed_input(x_tokens)
@@ -343,7 +349,7 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
             halt_loss = F.binary_cross_entropy_with_logits(q, is_correct)
             loss = pred_loss + 0.1 * halt_loss
 
-        optimizer.zero_grad(set_to_none = True)
+        optimizer.zero_grad(set_to_none=True)
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
         optimizer.step()
@@ -358,7 +364,7 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg):
             history_y.append(y)
             history_z.append(z)
 
-        if q.detach().mean().item() > 0:
+        if sup_step >= min_sup_steps and q.detach().mean().item() > 0:
             break
 
     return total_loss_value / n_sup_steps

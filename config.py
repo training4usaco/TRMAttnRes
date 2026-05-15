@@ -49,7 +49,7 @@ class SudokuConfig:
         weight_decay=1.0,
         total_steps=50_000,
         warmup_steps=4000,
-        batch_size=4096,
+        batch_size=768,
     ))
     n_augmentations: int = 1000
     data_dir: str = "data/sudoku"

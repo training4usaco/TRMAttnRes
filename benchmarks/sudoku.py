@@ -121,7 +121,7 @@ class SudokuBenchmark(Benchmark):
                 y_tokens = y_tokens.to(device)
 
                 logits_list = model(x_tokens)
-                preds = logits_list[-1].argmax(-1)
+                preds = logits_list[0].argmax(-1)
                 n_correct += (preds == y_tokens).all(dim=1).sum().item()
                 n_total += x_tokens.shape[0]
 
