@@ -261,6 +261,8 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
                     state[k] = v.to(device)
+        for name in ema.shadow:
+            ema.shadow[name] = ema.shadow[name].to(device)
         print(f"Resumed from {resume_path} at step {start_step}")
 
     train_loader = benchmark.get_train_loader(train_cfg.batch_size)
@@ -355,7 +357,7 @@ def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg, halt
             )
             with torch.no_grad():
                 is_correct = (logits.argmax(-1) == y_tokens).all(dim=1).float().unsqueeze(1)
-            halt_loss = F.binary_cross_entropy_with_logits(q, is_correct.squeeze(1).long())
+            halt_loss = F.cross_entropy(q, is_correct.squeeze(1).long())
             loss = pred_loss + 0.1 * halt_loss
 
         optimizer.zero_grad(set_to_none=True)

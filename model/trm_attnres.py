@@ -88,7 +88,7 @@ class TRMAttnRes(nn.Module):
             with torch.no_grad():
                 preds = logits.argmax(-1)   # (B, L)
                 is_correct = (preds == y_tokens).all(dim=1).float().unsqueeze(1)    # (B, 1)
-            halt_loss = F.binary_cross_entropy_with_logits(q, is_correct.squeeze(1).long())
+            halt_loss = F.cross_entropy(q, is_correct.squeeze(1).long())
 
             losses.append(pred_loss + 0.1 * halt_loss)
             final_logits = logits.detach()
