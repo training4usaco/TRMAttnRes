@@ -246,18 +246,28 @@ def _debug_nan(model: nn.Module, x_tokens: torch.Tensor, y_tokens: torch.Tensor,
 
 # --- Training loop --------------------------------------------------------
 
-def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: str):
+def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: str, resume_path: str = None):
     device = get_device(train_cfg.device)
 
     model = build_model(model_cfg).to(device)
     ema = EMA(model, decay=train_cfg.ema_decay)
     optimizer = build_optimizer(model, train_cfg)
 
+    start_step = 0
+    if resume_path is not None:
+        start_step = load_checkpoint(resume_path, model, ema, optimizer)
+        # Move optimizer states to device
+        for state in optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device)
+        print(f"Resumed from {resume_path} at step {start_step}")
+
     train_loader = benchmark.get_train_loader(train_cfg.batch_size)
     train_loader.pin_memory = True
 
     print(f"Parameters: {model.num_parameters():,}")
-    print(f"Training on {device} for {train_cfg.total_steps} steps")
+    print(f"Training on {device} for {train_cfg.total_steps} steps (starting at {start_step})")
 
     def infinite_loader(loader):
         while True:
@@ -268,7 +278,7 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
     t0 = time.time()
 
     model.train()
-    for step in range(train_cfg.total_steps):
+    for step in range(start_step, train_cfg.total_steps):
         x_tokens, y_tokens = next(data_iter)
         x_tokens = x_tokens.to(device, non_blocking=True)
         y_tokens = y_tokens.to(device, non_blocking=True)
@@ -278,7 +288,6 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
             if not pg.get("is_embed", False):
                 pg["lr"] = lr
 
-        # --- Deep supervision: backward + step at EACH supervision step ---
         step_loss = _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg)
 
         ema.update()
@@ -377,6 +386,7 @@ def main():
     parser.add_argument("--benchmark", choices=["sudoku", "maze", "arc1", "arc2", "arc3"], required=True)
     parser.add_argument("--use_attn_res", action="store_true")
     parser.add_argument("--run_name", type=str, default=None)
+    parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
     args = parser.parse_args()
 
     if args.benchmark == "sudoku":
@@ -392,7 +402,7 @@ def main():
 
     cfg.model.use_attn_res = args.use_attn_res
     run_name = args.run_name or f"{args.benchmark}_{'attnres' if args.use_attn_res else 'base'}"
-    train(benchmark, cfg.model, cfg.train, run_name)
+    train(benchmark, cfg.model, cfg.train, run_name, resume_path=args.resume)
 
 
 if __name__ == "__main__":
