@@ -7,15 +7,21 @@ def stable_cross_entropy(logits: torch.Tensor, targets: torch.Tensor, ignore_ind
     logits = logits - logits.amax(dim=-1, keepdim=True)
     return F.cross_entropy(logits, targets, ignore_index=ignore_index)
 
-class RMSNorm(nn.Module):
-    def __init__(self, d_model: int, eps=1e-8):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(d_model))
-        self.eps = eps
+# class RMSNorm(nn.Module):
+#     def __init__(self, d_model: int, eps=1e-8):
+#         super().__init__()
+#         self.weight = nn.Parameter(torch.ones(d_model))
+#         self.eps = eps
+#
+#     def forward(self, x: torch.Tensor) -> torch.Tensor:
+#         rms = torch.sqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)
+#         return x / rms * self.weight
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        rms = torch.sqrt(torch.mean(x * x, dim=-1, keepdim=True) + self.eps)
-        return x / rms * self.weight
+def rms_norm(x: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    dtype = x.dtype
+    x = x.float()
+    x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+    return x.to(dtype)
 
 def calculate_rotary_cis(head_dim: int, max_L: int, base: float = 10_000.0) -> torch.Tensor:
     theta = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim))
@@ -104,8 +110,8 @@ class TransformerBlock(nn.Module):
         super().__init__()
 
         self.use_attention = use_attention
-        self.norm1 = RMSNorm(d_model)
-        self.norm2 = RMSNorm(d_model)
+        # self.norm1 = RMSNorm(d_model)
+        # self.norm2 = RMSNorm(d_model)
         self.ffn = SwiGLU(d_model, d_ff)
 
         if self.use_attention:
@@ -115,8 +121,8 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, rotary_cis: torch.Tensor | None = None) -> torch.Tensor:
         if self.use_attention:
-            x = self.norm1(x + self.block(x, rotary_cis))
+            x = rms_norm(x + self.block(x, rotary_cis))
         else:
-            x = self.norm1(x + self.block(x))
-        x = self.norm2(x + self.ffn(x))
+            x = rms_norm(x + self.block(x))
+        x = rms_norm(x + self.ffn(x))
         return x
