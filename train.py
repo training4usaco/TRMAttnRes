@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from adam_atan2_pytorch import AdamAtan2
+
 from config import SudokuConfig, MazeConfig, ARCConfig, TrainConfig, ModelConfig
 from model.layers import stable_cross_entropy
 from model.trm import TRM
@@ -121,16 +123,16 @@ def build_optimizer(model: nn.Module, train_cfg: TrainConfig) -> torch.optim.Opt
             else:
                 other_params.append(param)
         param_groups = [
-            {"params": other_params, "lr": train_cfg.lr, "is_embed": False},
-            {"params": embed_params, "lr": train_cfg.embed_lr, "is_embed": True},
+            {"params": other_params, "lr": train_cfg.lr},
+            {"params": embed_params, "lr": train_cfg.embed_lr},
         ]
     else:
         param_groups = [
             {"params": [p for p in model.parameters() if p.requires_grad],
-             "lr": train_cfg.lr, "is_embed": False}
+             "lr": train_cfg.lr}
         ]
 
-    return torch.optim.AdamW(
+    return AdamAtan2(
         param_groups,
         betas=(train_cfg.beta1, train_cfg.beta2),
         weight_decay=train_cfg.weight_decay,

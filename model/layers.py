@@ -117,12 +117,15 @@ class TransformerBlock(nn.Module):
         if self.use_attention:
             self.block = MultiHeadedAttention(d_model, n_heads)
         else:
-            self.block = MLPMixer(d_model, context_len)
+            self.block = self.block = SwiGLU(context_len, 256 * 3 // 2)
 
     def forward(self, x: torch.Tensor, rotary_cis: torch.Tensor | None = None) -> torch.Tensor:
         if self.use_attention:
             x = rms_norm(x + self.block(x, rotary_cis))
         else:
-            x = rms_norm(x + self.block(x))
+            xt = x.transpose(1, 2)
+            xt = rms_norm(xt + self.block(xt))
+            x = xt.transpose(1, 2)
+    
         x = rms_norm(x + self.ffn(x))
         return x
