@@ -102,7 +102,7 @@ class SudokuBenchmark(Benchmark):
 
     def get_train_loader(self, batch_size: int) -> DataLoader:
         return DataLoader(self.train_dataset, batch_size=batch_size, shuffle=True,
-                          num_workers=self.cfg.num_workers, pin_memory=True)
+                          num_workers=self.cfg.num_workers, pin_memory=True, drop_last=True)
 
     def get_test_loader(self, batch_size: int) -> DataLoader:
         return DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False,

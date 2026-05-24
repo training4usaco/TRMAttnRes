@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .layers import TransformerBlock, calculate_rotary_cis, stable_cross_entropy
+from .layers import TransformerBlock, calculate_rotary_cis, stablemax_cross_entropy
 
 class TRMNet(nn.Module):
     def __init__(self, d_model: int, n_heads: int, d_ff: int, context_len: int, use_attention: bool = True):
@@ -38,7 +38,8 @@ class TRM(nn.Module):
                  n: int = 6,
                  T: int = 3,
                  n_sup: int = 16,
-                 use_attention: bool = True):
+                 use_attention: bool = True,
+                 n_prefix_tokens = 0):
         super().__init__()
 
         self.vocab_size = vocab_size
@@ -50,6 +51,7 @@ class TRM(nn.Module):
         self.T = T
         self.n_sup = n_sup
         self.use_attention = use_attention
+        self.n_prefix_tokens = n_prefix_tokens
 
         self.embed_scale = math.sqrt(d_model)
         embed_init_std = 1.0 / self.embed_scale
@@ -59,12 +61,12 @@ class TRM(nn.Module):
         self.y_init = nn.Parameter(torch.empty(1, 1, d_model))
         self.z_init = nn.Parameter(torch.empty(1, 1, d_model))
 
-        self.net = TRMNet(d_model, n_heads, d_ff, context_len, use_attention)
+        self.net = TRMNet(d_model, n_heads, d_ff, context_len + n_prefix_tokens, use_attention)
 
         self.output_head = nn.Linear(d_model, vocab_size, bias=False)
         self.q_head = nn.Linear(d_model, 2, bias=True)
         nn.init.zeros_(self.q_head.weight)
-        nn.init.zeros_(self.q_head.bias)
+        nn.init.constant_(self.q_head.bias, -5)
 
         nn.init.trunc_normal_(self.y_init, std = 1.0)
         nn.init.trunc_normal_(self.z_init, std = 1.0)
@@ -72,8 +74,15 @@ class TRM(nn.Module):
         nn.init.normal_(self.output_head.weight, std=0.02)
         nn.init.zeros_(self.q_head.weight)
 
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+
     def embed_input(self, x_tokens: torch.Tensor) -> torch.Tensor:
-        return self.embed_scale * self.input_embeddings(x_tokens)
+        x = self.embed_scale * self.input_embeddings(x_tokens)
+
+        if self.n_prefix_tokens > 0:
+            cls = self.cls_token.expand(x.shape[0], -1, -1)
+            x = torch.cat([cls, x], dim=1)
+        return x
 
     def latent_recursion(self, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         for _ in range(self.n):
@@ -90,8 +99,8 @@ class TRM(nn.Module):
         return y, z
 
     def get_output(self, y: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        logits = self.output_head(y)   # (B, L, vocab_size)
-        q = self.q_head(y.mean(dim=1)) # (B, 2)
+        logits = self.output_head(y[:, self.n_prefix_tokens:])   # (B, L, vocab_size)
+        q = self.q_head(y[:, 0] if self.n_prefix_tokens > 0 else y.mean(dim=1)) # (B, 2)
 
         return logits, q
 
@@ -102,9 +111,10 @@ class TRM(nn.Module):
         """
         B, L = x_tokens.shape
 
-        x = self.embed_input(x_tokens)
-        y = self.y_init.expand(B, L, self.d_model)
-        z = self.z_init.expand(B, L, self.d_model)
+        x = self.embed_input(x_tokens)  # (B, L, D)
+        seq_len = x.shape[1]
+        y = self.y_init.expand(B, seq_len, self.d_model)
+        z = self.z_init.expand(B, seq_len, self.d_model)
 
         if self.training and y_tokens is not None:
             return self._train_forward(x, y, z, y_tokens)

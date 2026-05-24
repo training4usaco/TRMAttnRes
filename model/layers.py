@@ -3,9 +3,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-def stable_cross_entropy(logits: torch.Tensor, targets: torch.Tensor, ignore_index: int = -1) -> torch.Tensor:
-    logits = logits - logits.amax(dim=-1, keepdim=True)
-    return F.cross_entropy(logits, targets, ignore_index=ignore_index)
+def _s(x, eps=1e-30):
+    return torch.where(x < 0, 1.0 / (1.0 - x + eps), x + 1.0)
+
+def _log_stablemax(x, dim=-1):
+    s_x = _s(x)
+    return torch.log(s_x / s_x.sum(dim=dim, keepdim=True))
+
+def stablemax_cross_entropy(logits, targets, ignore_index=-1):
+    log_probs = _log_stablemax(logits.to(torch.float64), dim=-1)
+    valid_mask = targets != ignore_index
+    safe_targets = torch.where(valid_mask, targets, 0).long()
+    per_token = -torch.gather(log_probs, dim=-1, index=safe_targets.unsqueeze(-1)).squeeze(-1)
+    per_token = torch.where(valid_mask, per_token, 0.0)
+    return per_token.sum() / valid_mask.sum().clamp(min=1)
 
 # class RMSNorm(nn.Module):
 #     def __init__(self, d_model: int, eps=1e-8):

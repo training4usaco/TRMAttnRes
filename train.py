@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from adam_atan2_pytorch import AdamAtan2
 
 from config import SudokuConfig, MazeConfig, ARCConfig, TrainConfig, ModelConfig
-from model.layers import stable_cross_entropy
+from model.layers import stablemax_cross_entropy
 from model.trm import TRM
 from model.trm_attnres import TRMAttnRes
 from benchmarks.sudoku import SudokuBenchmark
@@ -98,7 +98,6 @@ def build_model(model_cfg: ModelConfig) -> nn.Module:
     else:
         model = trm
 
-    # Compile the inner network — this is called hundreds of times per step
     model.trm.net if hasattr(model, 'trm') else model.net
     inner = model.trm.net if hasattr(model, 'trm') else model.net
     inner = torch.compile(inner)
@@ -166,86 +165,6 @@ def load_checkpoint_eval(path, model, ema):
     return ckpt["step"]
 
 
-# --- NaN diagnostics ------------------------------------------------------
-
-def _scan_params_for_nan(model: nn.Module) -> list[str]:
-    """Return names of parameters/gradients that contain NaN or Inf."""
-    issues = []
-    for name, param in model.named_parameters():
-        if torch.isnan(param.data).any() or torch.isinf(param.data).any():
-            issues.append(f"  PARAM {name}: nan={torch.isnan(param.data).sum().item()} inf={torch.isinf(param.data).sum().item()}")
-        if param.grad is not None:
-            if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
-                issues.append(f"  GRAD  {name}: nan={torch.isnan(param.grad).sum().item()} inf={torch.isinf(param.grad).sum().item()}")
-    return issues
-
-
-def _find_first_nan_module(model: nn.Module, x_tokens: torch.Tensor, y_tokens: torch.Tensor) -> dict:
-    """Register forward hooks and run a no-grad pass to find the first module that outputs NaN."""
-    first_nan: dict = {}
-    hooks = []
-
-    def make_hook(name):
-        def hook(module, inp, output):
-            if first_nan:          # already found one — skip noise
-                return
-            out = output[0] if isinstance(output, tuple) else output
-            if not isinstance(out, torch.Tensor):
-                return
-            if torch.isnan(out).any() or torch.isinf(out).any():
-                inp_stats = []
-                for t in inp:
-                    if isinstance(t, torch.Tensor):
-                        inp_stats.append(f"min={t.min():.3g} max={t.max():.3g} nan={torch.isnan(t).sum().item()}")
-                first_nan['module'] = name
-                first_nan['output_shape'] = tuple(out.shape)
-                first_nan['nan_frac'] = torch.isnan(out).float().mean().item()
-                first_nan['inf_frac'] = torch.isinf(out).float().mean().item()
-                first_nan['input_stats'] = inp_stats
-        return hook
-
-    for name, module in model.named_modules():
-        hooks.append(module.register_forward_hook(make_hook(name)))
-
-    try:
-        with torch.no_grad():
-            model(x_tokens, y_tokens)
-    finally:
-        for h in hooks:
-            h.remove()
-
-    return first_nan
-
-
-def _debug_nan(model: nn.Module, x_tokens: torch.Tensor, y_tokens: torch.Tensor,
-               loss: torch.Tensor, step: int) -> None:
-    print(f"\n{'='*60}")
-    print(f"[NaN DEBUG] Step {step} — loss={loss.item()}")
-
-    # 1. Param / grad scan
-    issues = _scan_params_for_nan(model)
-    if issues:
-        print("[NaN DEBUG] NaN/Inf in parameters or gradients:")
-        for line in issues:
-            print(line)
-    else:
-        print("[NaN DEBUG] No NaN/Inf in parameters or gradients.")
-
-    # 2. Find first NaN module
-    model.eval()
-    nan_info = _find_first_nan_module(model, x_tokens, y_tokens)
-    model.train()
-    if nan_info:
-        print(f"[NaN DEBUG] First NaN/Inf output at module: {nan_info['module']}")
-        print(f"            output shape : {nan_info['output_shape']}")
-        print(f"            nan fraction : {nan_info['nan_frac']:.4f}")
-        print(f"            inf fraction : {nan_info['inf_frac']:.4f}")
-        print(f"            input stats  : {nan_info['input_stats']}")
-    else:
-        print("[NaN DEBUG] No NaN/Inf found in no-grad eval pass (may be training-specific).")
-    print('='*60 + '\n')
-
-
 # --- Training loop --------------------------------------------------------
 
 def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: str, resume_path: str = None):
@@ -258,7 +177,6 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
     start_step = 0
     if resume_path is not None:
         start_step = load_checkpoint(resume_path, model, ema, optimizer)
-        # Move optimizer states to device
         for state in optimizer.state.values():
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
@@ -270,6 +188,8 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
     train_loader = benchmark.get_train_loader(train_cfg.batch_size)
     train_loader.pin_memory = True
 
+    trm = model.trm if hasattr(model, 'trm') else model
+
     print(f"Parameters: {model.num_parameters():,}")
     print(f"Training on {device} for {train_cfg.total_steps} steps (starting at {start_step})")
 
@@ -278,32 +198,105 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
             yield from loader
 
     data_iter = infinite_loader(train_loader)
+
+    carry_y = None
+    carry_z = None
+    carry_x = None
+    carry_labels = None
+    sup_steps = None
+    halted = None
+    min_halt_steps = None
+
     running_loss = 0.0
     t0 = time.time()
 
     model.train()
     for step in range(start_step, train_cfg.total_steps):
-        x_tokens, y_tokens = next(data_iter)
-        x_tokens = x_tokens.to(device, non_blocking=True)
-        y_tokens = y_tokens.to(device, non_blocking=True)
+        batch_x, batch_y = next(data_iter)
+        batch_x = batch_x.to(device, non_blocking=True)
+        batch_y = batch_y.to(device, non_blocking=True)
+        B, L = batch_x.shape
+        seq_len = L + trm.n_prefix_tokens
 
-        lr = get_lr(step, train_cfg.lr, train_cfg.warmup_steps)
+        if carry_y is None:
+            halted = torch.ones(B, dtype=torch.bool, device=device)
+            sup_steps = torch.zeros(B, dtype=torch.long, device=device)
+            min_halt_steps = torch.zeros(B, dtype=torch.long, device=device)
+            carry_x = batch_x
+            carry_labels = batch_y
+            carry_y = trm.y_init.expand(B, seq_len, trm.d_model).clone()
+            carry_z = trm.z_init.expand(B, seq_len, trm.d_model).clone()
+
+        if halted.any():
+            h1 = halted.unsqueeze(-1)                  # (B, 1)
+            h3 = halted.unsqueeze(-1).unsqueeze(-1)     # (B, 1, 1)
+
+            carry_x = torch.where(h1, batch_x, carry_x)
+            carry_labels = torch.where(h1, batch_y, carry_labels)
+
+            carry_y = torch.where(h3, trm.y_init.expand(B, seq_len, -1), carry_y)
+            carry_z = torch.where(h3, trm.z_init.expand(B, seq_len, -1), carry_z)
+
+            sup_steps = torch.where(halted, 0, sup_steps)
+
+            exploring = torch.rand(B, device=device) < 0.1
+            rand_min = torch.randint(2, trm.n_sup + 1, (B,), device=device)
+            min_halt_steps = torch.where(
+                halted & exploring, rand_min,
+                torch.where(halted, torch.zeros_like(min_halt_steps), min_halt_steps)
+            )
+
+        lr = get_lr(step, train_cfg.lr, train_cfg.warmup_steps, train_cfg.total_steps)
         for pg in optimizer.param_groups:
             if not pg.get("is_embed", False):
                 pg["lr"] = lr
 
-        step_loss = _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg)
+        x_emb = trm.embed_input(carry_x)
 
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            y_new, z_new = trm.deep_recursion(x_emb, carry_y, carry_z)
+            logits, q = trm.get_output(y_new)
+
+            pred_loss = stablemax_cross_entropy(
+                logits.reshape(-1, trm.vocab_size),
+                carry_labels.reshape(-1),
+                ignore_index=-1,
+            )
+
+            with torch.no_grad():
+                is_correct = (logits.argmax(-1) == carry_labels).all(dim=1).float()
+
+            halt_loss = F.binary_cross_entropy_with_logits(q[:, 0], is_correct)
+            loss = pred_loss + 0.5 * halt_loss
+
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
+        optimizer.step()
         ema.update()
-        running_loss += step_loss
+
+        running_loss += loss.item()
+
+        carry_y = y_new.detach()
+        carry_z = z_new.detach()
+        sup_steps = sup_steps + 1
+
+        with torch.no_grad():
+            is_last = sup_steps >= trm.n_sup
+            wants_halt = q[:, 0] > 0  # sigmoid > 0.5
+            halted = is_last | (wants_halt & (sup_steps >= min_halt_steps))
 
         if step % train_cfg.log_every == 0 and step > 0:
             elapsed = time.time() - t0
             steps_per_sec = train_cfg.log_every / elapsed
             remaining = (train_cfg.total_steps - step) / steps_per_sec
+            avg_steps = sup_steps.float().mean().item()
+            halt_frac = halted.float().mean().item()
             print(
                 f"Step {step:6d} | "
                 f"loss {running_loss / train_cfg.log_every:.4f} | "
+                f"avg_sup {avg_steps:.1f} | "
+                f"halt% {halt_frac:.2f} | "
                 f"{steps_per_sec:.2f} steps/sec | "
                 f"eta {remaining / 3600:.1f}h"
             )
@@ -318,69 +311,6 @@ def train(benchmark, model_cfg: ModelConfig, train_cfg: TrainConfig, run_name: s
     save_checkpoint(model, ema, optimizer, train_cfg.total_steps, path)
     print("Training complete.")
     return model, ema
-
-
-def _deep_supervision_step(model, optimizer, x_tokens, y_tokens, train_cfg, halt_exploration_prob=0.1):
-    B, L = x_tokens.shape
-
-    if hasattr(model, 'trm'):
-        trm = model.trm
-    else:
-        trm = model
-
-    y = trm.y_init.expand(B, L, trm.d_model)
-    z = trm.z_init.expand(B, L, trm.d_model)
-    history_y, history_z = [], []
-
-    total_loss_value = 0.0
-    n_sup_steps = 0
-
-    if random.random() < halt_exploration_prob:
-        min_sup_steps = random.randint(2, trm.n_sup)
-    else:
-        min_sup_steps = 0
-
-    for sup_step in range(trm.n_sup):
-        x = trm.embed_input(x_tokens)
-
-        if hasattr(model, 'attn_res'):
-            y_init = trm.y_init.expand(B, L, trm.d_model)
-            z_init = trm.z_init.expand(B, L, trm.d_model)
-            y, z = model.attn_res(sup_step, y_init, z_init, history_y, history_z)
-
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            y, z = trm.deep_recursion(x, y, z)
-            logits, q = trm.get_output(y)
-
-            pred_loss = stable_cross_entropy(
-                logits.reshape(-1, trm.vocab_size),
-                y_tokens.reshape(-1),
-                ignore_index=-1,
-            )
-            with torch.no_grad():
-                is_correct = (logits.argmax(-1) == y_tokens).all(dim=1).float().unsqueeze(1)
-            halt_loss = F.cross_entropy(q, is_correct.squeeze(1).long())
-            loss = pred_loss + 0.1 * halt_loss
-
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
-        optimizer.step()
-
-        total_loss_value += loss.item()
-        n_sup_steps += 1
-
-        y = y.detach()
-        z = z.detach()
-
-        if hasattr(model, 'attn_res'):
-            history_y.append(y)
-            history_z.append(z)
-
-        if sup_step >= min_sup_steps and q.detach().argmax(-1).float().mean().item() > 0.5:
-            break
-
-    return total_loss_value / n_sup_steps
 
 
 # --- Entry point ----------------------------------------------------------

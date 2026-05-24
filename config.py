@@ -16,6 +16,7 @@ class ModelConfig:
     n_sup: int = 16
     use_attention: bool = True
     use_attn_res: bool = False
+    n_prefix_tokens: int = 0
 
 
 @dataclass
@@ -32,7 +33,7 @@ class TrainConfig:
     grad_clip: float = 1.0
     checkpoint_every: int = 1000
     checkpoint_dir: str = "checkpoints"
-    log_every: int = 100
+    log_every: int = 1000
     device: str = "cuda"
 
 
@@ -44,11 +45,12 @@ class SudokuConfig:
         n=6,
         T=3,
         use_attention=False,
+        n_prefix_tokens=1,
     ))
     train: TrainConfig = field(default_factory=lambda: TrainConfig(
         weight_decay=1.0,
         total_steps=100_000,
-        warmup_steps=4000,
+        warmup_steps=2000,
         batch_size=768,
     ))
     n_augmentations: int = 1000

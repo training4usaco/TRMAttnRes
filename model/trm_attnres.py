@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .trm import TRM
-from .layers import stable_cross_entropy, rms_norm
+from .layers import stablemax_cross_entropy, rms_norm
 
 
 class SupervisionStepAttnRes(nn.Module):
@@ -58,8 +58,9 @@ class TRMAttnRes(nn.Module):
         B, L = x_tokens.shape
         x = self.trm.embed_input(x_tokens)
 
-        y_init = self.trm.y_init.expand(B, L, self.trm.d_model)
-        z_init = self.trm.z_init.expand(B, L, self.trm.d_model)
+        seq_len = L + self.trm.n_prefix_tokens
+        y_init = self.trm.y_init.expand(B, seq_len, self.trm.d_model)
+        z_init = self.trm.z_init.expand(B, seq_len, self.trm.d_model)
 
         if self.training and y_tokens is not None:
             return self._train_forward(x, y_init, z_init, y_tokens)
